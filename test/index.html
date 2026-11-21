@@ -23,6 +23,8 @@
   button:disabled { background: #2a3342; color: #6b7686; cursor: not-allowed; }
   pre { background: #0c0f14; padding: 12px; border-radius: 8px; color: #9aa6b8; font-size: 15px; white-space: pre-wrap; }
   canvas#xrcanvas { display: none; }
+  a.back { display: inline-block; margin-bottom: 20px; font-size: 22px; padding: 14px 22px; border-radius: 12px; background: #2a3342; color: #fff; text-decoration: none; }
+  a.back:hover { background: #0B6B65; }
   label.bril { display: flex; align-items: center; gap: 10px; font-size: 20px; }
   select { font-size: 22px; padding: 12px; border-radius: 10px; background: #2a3342; color: #fff; border: 0; }
   button#btn-send { background: #0B6B65; }
@@ -36,6 +38,7 @@
 </head>
 <body>
 <main>
+  <a href="../" class="back">&larr; Alle demo's</a>
   <h1>PICO WebXR capability test</h1>
   <p class="sub">Open deze pagina in de PICO-browser. Start daarna de VR-test en de passthrough-test. Na afloop van elke sessie verschijnen extra regels in de tabel. Klik tot slot op "Verstuur resultaten".</p>
   <p class="sub"><strong>Hand tracking testen:</strong> zet hand tracking aan in de PICO-instellingen. Start de VR-test, leg beide controllers neer en houd je handen voor de bril. Knijp duim en wijsvinger samen (pinch) terwijl je naar een kubus wijst.</p>

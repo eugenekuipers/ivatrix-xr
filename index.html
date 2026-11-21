@@ -6,20 +6,86 @@
 <meta name="robots" content="noindex, nofollow">
 <title>Ivatrix XR</title>
 <style>
-  body { margin: 0; font-family: Inter, system-ui, sans-serif; background: #232427; color: #F6F5F1; font-size: 22px; }
-  main { max-width: 900px; margin: 0 auto; padding: 48px 24px; }
-  h1 { font-size: 36px; margin: 0 0 8px; }
-  p { color: #b9bab5; }
-  a.card { display: block; margin: 16px 0; padding: 24px; border-radius: 12px; background: #2B2C30; color: #F6F5F1; text-decoration: none; border-left: 6px solid #29BFB5; }
-  a.card:hover { background: #0B6B65; }
-  a.card span { display: block; font-size: 17px; color: #b9bab5; margin-top: 6px; }
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: Inter, system-ui, sans-serif; background: #232427; color: #F6F5F1; }
+  main { max-width: 1100px; margin: 0 auto; padding: 48px 32px 64px; }
+  header { display: flex; align-items: center; justify-content: space-between; gap: 24px; margin-bottom: 36px; }
+  .logo { font-size: 44px; font-weight: 700; letter-spacing: -0.5px; }
+  .logo .dot1 { color: #29BFB5; } .logo .dot2 { color: #CDF441; }
+  .intro { font-size: 22px; color: #b9bab5; margin: 6px 0 0; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 24px; }
+  a.demo { display: flex; flex-direction: column; justify-content: space-between; min-height: 200px; padding: 28px; border-radius: 18px;
+           background: #2B2C30; color: #F6F5F1; text-decoration: none; border: 3px solid transparent; transition: background .15s, border-color .15s; }
+  a.demo:hover, a.demo:focus { background: #0B6B65; border-color: #29BFB5; outline: none; }
+  a.demo h2 { font-size: 30px; margin: 0 0 10px; }
+  a.demo p { font-size: 20px; line-height: 1.4; color: #d6d6d1; margin: 0; }
+  .tags { display: flex; gap: 8px; margin-top: 18px; flex-wrap: wrap; }
+  .tag { font-size: 16px; padding: 6px 12px; border-radius: 999px; background: #1c1d20; color: #CDF441; }
+  .tag.muted { color: #b9bab5; }
+  button.refresh { font-size: 20px; padding: 14px 22px; border-radius: 12px; border: 0; background: #2B2C30; color: #F6F5F1; cursor: pointer; }
+  button.refresh:hover { background: #0B6B65; }
+  footer { margin-top: 40px; font-size: 16px; color: #8d8e89; }
 </style>
 </head>
 <body>
 <main>
-  <h1>Ivatrix XR</h1>
-  <p>Demo's voor workshops op de PICO-brillen.</p>
-  <a class="card" href="test/">Capability test<span>Controleert wat deze bril in de browser ondersteunt: VR, passthrough, hand tracking, framerate.</span></a>
+  <header>
+    <div>
+      <div class="logo">iv<span class="dot1">a</span>tr<span class="dot2">i</span>x XR</div>
+      <p class="intro">Kies een demo. Richt je controller op een tegel en druk op de trekker.</p>
+    </div>
+    <button class="refresh" onclick="location.reload()">Vernieuwen</button>
+  </header>
+
+  <div class="grid" id="demos"></div>
+
+  <footer id="footer"></footer>
 </main>
+
+<script>
+// Voeg nieuwe demo's hier toe. Volgorde = volgorde op het scherm.
+const DEMOS = [
+  {
+    title: 'Capability test',
+    text: 'Controleert wat deze bril kan: VR, passthrough, controllers, hand tracking en framerate.',
+    href: 'test/',
+    tags: ['VR', 'Passthrough', 'Test'],
+    audience: 'trainer',
+  },
+];
+
+const grid = document.getElementById('demos');
+for (const d of DEMOS) {
+  const a = document.createElement('a');
+  a.className = 'demo';
+  a.href = d.href;
+  a.innerHTML = `<div><h2></h2><p></p></div><div class="tags"></div>`;
+  a.querySelector('h2').textContent = d.title;
+  a.querySelector('p').textContent = d.text;
+  const tags = a.querySelector('.tags');
+  for (const t of d.tags) {
+    const s = document.createElement('span');
+    s.className = 'tag';
+    s.textContent = t;
+    tags.appendChild(s);
+  }
+  if (d.audience === 'trainer') {
+    const s = document.createElement('span');
+    s.className = 'tag muted';
+    s.textContent = 'Voor de trainer';
+    tags.appendChild(s);
+  }
+  grid.appendChild(a);
+}
+
+const ua = navigator.userAgent;
+const device = /PICO 4 Enterprise/i.test(ua) ? 'PICO 4 Enterprise'
+  : /Quest 3/i.test(ua) ? 'Meta Quest 3'
+  : /Quest Pro/i.test(ua) ? 'Meta Quest Pro'
+  : /OculusBrowser/i.test(ua) ? 'Meta Quest'
+  : 'browser';
+document.getElementById('footer').textContent = `Ivatrix XR · ${device} · ${DEMOS.length} demo${DEMOS.length === 1 ? '' : "'s"}`;
+</script>
 </body>
 </html>
