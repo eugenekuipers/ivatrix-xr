@@ -1,0 +1,333 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Ivatrix XR · 3D-objecten</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin: 0; font-family: Inter, system-ui, sans-serif; background: #232427; color: #F6F5F1; font-size: 20px; }
+  main { max-width: 960px; margin: 0 auto; padding: 32px 24px 64px; }
+  a.back { display: inline-block; margin-bottom: 20px; font-size: 22px; padding: 14px 22px; border-radius: 12px; background: #2B2C30; color: #fff; text-decoration: none; }
+  a.back:hover { background: #0B6B65; }
+  h1 { font-size: 34px; margin: 0 0 8px; }
+  p { color: #b9bab5; line-height: 1.5; }
+  .buttons { display: flex; flex-wrap: wrap; gap: 12px; margin: 24px 0; }
+  button { font-size: 22px; padding: 16px 24px; border: 0; border-radius: 12px; background: #0B6B65; color: #fff; cursor: pointer; }
+  button:disabled { background: #2B2C30; color: #6b6c68; cursor: not-allowed; }
+  table { border-collapse: collapse; margin-top: 12px; }
+  td { padding: 8px 16px 8px 0; color: #d6d6d1; vertical-align: top; }
+  td:first-child { color: #29BFB5; white-space: nowrap; }
+  #status { color: #CDF441; }
+  canvas { display: none; }
+  .credits { font-size: 15px; color: #8d8e89; margin-top: 32px; }
+</style>
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+} }
+</script>
+</head>
+<body>
+<main>
+  <a href="../" class="back">&larr; Alle demo's</a>
+  <h1>3D-objecten oppakken</h1>
+  <p>Vijf objecten staan in een halve cirkel voor je. Pak ze op, draai ze en bekijk ze van dichtbij.</p>
+  <p id="status">Modellen laden...</p>
+  <div class="buttons">
+    <button id="btn-vr" disabled>Start in VR</button>
+    <button id="btn-ar" disabled>Start in passthrough</button>
+  </div>
+  <table>
+    <tr><td>Oppakken</td><td>Richt op een object, houd de trekker of de grijpknop ingedrukt</td></tr>
+    <tr><td>Loslaten</td><td>Trekker of grijpknop loslaten; het object blijft in de lucht hangen</td></tr>
+    <tr><td>Draaien</td><td>Thumbstick links/rechts terwijl je vasthoudt</td></tr>
+    <tr><td>Dichterbij / verder</td><td>Thumbstick omhoog/omlaag terwijl je vasthoudt</td></tr>
+    <tr><td>Alles terugzetten</td><td>Knop A of X</td></tr>
+    <tr><td>Stoppen</td><td>Menuknop of systeemknop</td></tr>
+  </table>
+  <p class="credits">Modellen: ToyCar, SheenChair, Avocado, Lantern (Khronos glTF Sample Assets, CC0) en RobotExpressive (Tomás Laulhé / Quaternius, CC0).</p>
+</main>
+
+<script type="module">
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+import { XRControllerModelFactory } from 'three/addons/webxr/XRControllerModelFactory.js';
+
+const statusEl = document.getElementById('status');
+
+// ---------- Renderer en scene ----------
+const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+renderer.setPixelRatio(window.devicePixelRatio);
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.setClearColor(0x000000, 0);
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.xr.enabled = true;
+document.body.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(70, innerWidth / innerHeight, 0.01, 50);
+const pmrem = new THREE.PMREMGenerator(renderer);
+scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+scene.add(new THREE.HemisphereLight(0xffffff, 0x444444, 0.6));
+
+const world = new THREE.Group();
+scene.add(world);
+
+// Vloer (alleen in VR zichtbaar)
+const floor = new THREE.Mesh(
+  new THREE.CircleGeometry(4, 48),
+  new THREE.MeshStandardMaterial({ color: 0x2B2C30, roughness: 0.9 })
+);
+floor.rotation.x = -Math.PI / 2;
+world.add(floor);
+const grid = new THREE.GridHelper(8, 16, 0x29BFB5, 0x3a3b40);
+grid.position.y = 0.002;
+world.add(grid);
+
+// ---------- Objecten ----------
+const MODELS = [
+  { file: 'models/robot.glb',      name: 'Robot',      size: 0.45, anim: 'Dance' },
+  { file: 'models/toycar.glb',     name: 'Speelgoedauto', size: 0.35 },
+  { file: 'models/sheenchair.glb', name: 'Stoel',      size: 0.40 },
+  { file: 'models/lantern.glb',    name: 'Lantaarn',   size: 0.40 },
+  { file: 'models/avocado.glb',    name: 'Avocado',    size: 0.25 },
+];
+
+const grabbables = [];   // wrapper-groups die je kunt oppakken
+const mixers = [];
+const loader = new GLTFLoader();
+
+function homePosition(i, n) {
+  // halve cirkel op 1,1 m afstand, tafelhoogte 1,0 m
+  const angle = THREE.MathUtils.degToRad(-60 + (120 / (n - 1)) * i);
+  return new THREE.Vector3(Math.sin(angle) * 1.1, 1.0, -Math.cos(angle) * 1.1);
+}
+
+function addPedestal(pos) {
+  const p = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.16, 0.18, pos.y - 0.2, 32),
+    new THREE.MeshStandardMaterial({ color: 0x3a3b40, roughness: 0.6 })
+  );
+  p.position.set(pos.x, (pos.y - 0.2) / 2, pos.z);
+  world.add(p);
+  return p;
+}
+
+async function loadAll() {
+  let done = 0;
+  await Promise.all(MODELS.map(async (m, i) => {
+    const gltf = await loader.loadAsync(m.file);
+    const obj = gltf.scene;
+
+    // zware materiaaleffecten uitzetten voor stabiele framerate
+    obj.traverse(o => {
+      if (o.isMesh && o.material) {
+        const mats = Array.isArray(o.material) ? o.material : [o.material];
+        mats.forEach(mat => { if ('transmission' in mat && mat.transmission > 0) { mat.transmission = 0; mat.transparent = false; } });
+      }
+    });
+
+    // normaliseren: grootste afmeting = m.size, middelpunt in de oorsprong
+    const box = new THREE.Box3().setFromObject(obj);
+    const size = box.getSize(new THREE.Vector3());
+    const scale = m.size / Math.max(size.x, size.y, size.z);
+    obj.scale.setScalar(scale);
+    const center = box.getCenter(new THREE.Vector3()).multiplyScalar(scale);
+    obj.position.sub(center);
+
+    const wrapper = new THREE.Group();
+    wrapper.add(obj);
+    wrapper.userData = { name: m.name, home: homePosition(i, MODELS.length), homeQuat: new THREE.Quaternion(), held: null };
+    wrapper.position.copy(wrapper.userData.home);
+    wrapper.position.y += m.size / 2 - 0.2 + 0.02; // op de sokkel
+    wrapper.userData.home.copy(wrapper.position);
+    wrapper.lookAt(0, wrapper.position.y, 0);
+    wrapper.userData.homeQuat.copy(wrapper.quaternion);
+
+    // selectiekader
+    const hl = new THREE.Box3Helper(new THREE.Box3().setFromObject(obj), 0xCDF441);
+    hl.visible = false;
+    wrapper.add(hl);
+    wrapper.userData.highlight = hl;
+
+    if (gltf.animations?.length && m.anim) {
+      const mixer = new THREE.AnimationMixer(obj);
+      const clip = THREE.AnimationClip.findByName(gltf.animations, m.anim) || gltf.animations[0];
+      mixer.clipAction(clip).play();
+      mixers.push(mixer);
+    }
+
+    addPedestal(homePosition(i, MODELS.length));
+    world.add(wrapper);
+    grabbables.push(wrapper);
+    done++;
+    statusEl.textContent = `Modellen laden... ${done}/${MODELS.length}`;
+  }));
+}
+
+function resetAll() {
+  for (const g of grabbables) {
+    if (g.userData.held) continue;
+    world.attach(g);
+    g.position.copy(g.userData.home);
+    g.quaternion.copy(g.userData.homeQuat);
+  }
+}
+
+// ---------- Controllers ----------
+const cmf = new XRControllerModelFactory();
+const raycaster = new THREE.Raycaster();
+const tmpMat = new THREE.Matrix4();
+const controllers = [];
+
+function setRay(controller) {
+  tmpMat.identity().extractRotation(controller.matrixWorld);
+  raycaster.ray.origin.setFromMatrixPosition(controller.matrixWorld);
+  raycaster.ray.direction.set(0, 0, -1).applyMatrix4(tmpMat);
+}
+
+function findTarget(controller) {
+  setRay(controller);
+  const hits = raycaster.intersectObjects(grabbables, true);
+  for (const h of hits) {
+    let o = h.object;
+    while (o && !grabbables.includes(o)) o = o.parent;
+    if (o && !o.userData.held && o.userData.highlight !== h.object) return { obj: o, distance: h.distance };
+  }
+  return null;
+}
+
+function grab(controller) {
+  if (controller.userData.holding) return;
+  const t = findTarget(controller);
+  if (!t) return;
+  controller.attach(t.obj);
+  t.obj.userData.held = controller;
+  controller.userData.holding = t.obj;
+  controller.userData.ray.scale.z = t.distance;
+  pulse(controller, 0.4, 40);
+}
+
+function release(controller) {
+  const obj = controller.userData.holding;
+  if (!obj) return;
+  world.attach(obj);
+  obj.userData.held = null;
+  controller.userData.holding = null;
+}
+
+function pulse(controller, intensity, ms) {
+  const gp = controller.userData.inputSource?.gamepad;
+  const act = gp?.hapticActuators?.[0];
+  try { act?.pulse?.(intensity, ms); } catch {}
+}
+
+for (let i = 0; i < 2; i++) {
+  const c = renderer.xr.getController(i);
+  const ray = new THREE.Line(
+    new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, 0, -1)]),
+    new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.7 })
+  );
+  ray.scale.z = 3;
+  c.add(ray);
+  c.userData = { ray, holding: null, inputSource: null, prevA: false };
+  c.addEventListener('connected', e => { c.userData.inputSource = e.data; });
+  c.addEventListener('disconnected', () => { release(c); c.userData.inputSource = null; });
+  c.addEventListener('selectstart', () => grab(c));
+  c.addEventListener('selectend', () => release(c));
+  c.addEventListener('squeezestart', () => grab(c));
+  c.addEventListener('squeezeend', () => release(c));
+  scene.add(c);
+  controllers.push(c);
+
+  const grip = renderer.xr.getControllerGrip(i);
+  grip.add(cmf.createControllerModel(grip));
+  scene.add(grip);
+}
+
+function updateControllers(dt) {
+  for (const g of grabbables) if (!g.userData.held) g.userData.highlight.visible = false;
+
+  for (const c of controllers) {
+    const gp = c.userData.inputSource?.gamepad;
+    const held = c.userData.holding;
+
+    if (held) {
+      // thumbstick: draaien en afstand
+      const ax = gp?.axes ?? [];
+      const sx = ax[2] ?? 0, sy = ax[3] ?? 0;
+      if (Math.abs(sx) > 0.15) held.rotateY(sx * dt * 2.5);
+      if (Math.abs(sy) > 0.15) {
+        const d = held.position.length();
+        const nd = THREE.MathUtils.clamp(d + sy * dt * 1.2, 0.15, 3);
+        if (d > 0.001) held.position.multiplyScalar(nd / d);
+        c.userData.ray.scale.z = nd;
+      }
+      held.userData.highlight.visible = true;
+    } else {
+      const t = findTarget(c);
+      if (t) { t.obj.userData.highlight.visible = true; c.userData.ray.scale.z = t.distance; }
+      else c.userData.ray.scale.z = 3;
+    }
+
+    // knop A/X (xr-standard index 4): alles terugzetten
+    const a = !!gp?.buttons?.[4]?.pressed;
+    if (a && !c.userData.prevA) resetAll();
+    c.userData.prevA = a;
+  }
+}
+
+// ---------- Sessies ----------
+async function start(mode) {
+  let session;
+  try {
+    session = await navigator.xr.requestSession(mode, { optionalFeatures: ['local-floor'] });
+  } catch (e) {
+    statusEl.textContent = `Starten mislukt: ${e.message}`;
+    return;
+  }
+  let ref = 'local-floor';
+  try { await session.requestReferenceSpace('local-floor'); } catch { ref = 'local'; }
+  world.position.y = ref === 'local' ? -1.6 : 0;
+  renderer.xr.setReferenceSpaceType(ref);
+
+  const vr = mode === 'immersive-vr';
+  scene.background = vr ? new THREE.Color(0x232427) : null;
+  floor.visible = vr;
+  grid.visible = vr;
+  await renderer.xr.setSession(session);
+}
+
+// ---------- Loop ----------
+const clock = new THREE.Clock();
+renderer.setAnimationLoop(() => {
+  const dt = Math.min(clock.getDelta(), 0.05);
+  mixers.forEach(m => m.update(dt));
+  if (renderer.xr.isPresenting) updateControllers(dt);
+  renderer.render(scene, camera);
+});
+
+// ---------- Init ----------
+document.getElementById('btn-vr').addEventListener('click', () => start('immersive-vr'));
+document.getElementById('btn-ar').addEventListener('click', () => start('immersive-ar'));
+
+try {
+  await loadAll();
+  statusEl.textContent = 'Klaar. Kies VR of passthrough.';
+} catch (e) {
+  statusEl.textContent = `Laden mislukt: ${e.message}`;
+}
+if (navigator.xr) {
+  document.getElementById('btn-vr').disabled = !(await navigator.xr.isSessionSupported('immersive-vr').catch(() => false));
+  document.getElementById('btn-ar').disabled = !(await navigator.xr.isSessionSupported('immersive-ar').catch(() => false));
+} else {
+  statusEl.textContent += ' WebXR is niet beschikbaar in deze browser.';
+}
+</script>
+</body>
+</html>

@@ -12,6 +12,7 @@ WebXR-demo's voor Ivatrix-workshops op PICO 4 Enterprise (en Meta Quest 3 / Pro)
 |---|---|
 | `/` | Startpagina (kiosk-launcher) met tegels naar de demo's |
 | `/test/` | Capability test; resultaten gaan naar deploybase-formulier `xr-testresultaten` |
+| `/objecten/` | 3D-objecten oppakken, draaien en verplaatsen met de controllers |
 
 ## Nieuwe demo toevoegen
 
@@ -26,3 +27,13 @@ In PICO Business Suite: WebXR-link `https://xr.ivatrix.nl/` toevoegen en in kios
 ## Deploy
 
 Push naar `main`. Zolang deploy-on-push in deploybase nog niet aan staat: handmatig "Deploy main" in het dashboard.
+
+## Licenties 3D-modellen (`/objecten/models/`)
+
+| Bestand | Bron | Licentie |
+|---|---|---|
+| `robot.glb` | RobotExpressive, Tomás Laulhé (Quaternius), aangepast door Don McCurdy | CC0 1.0 |
+| `toycar.glb` | Khronos glTF Sample Assets, ToyCar | CC0 1.0 |
+| `sheenchair.glb` | Khronos glTF Sample Assets, SheenChair | CC0 1.0 |
+| `lantern.glb` | Khronos glTF Sample Assets, Lantern | CC0 1.0 |
+| `avocado.glb` | Khronos glTF Sample Assets, Avocado | CC0 1.0 |
