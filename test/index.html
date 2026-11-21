@@ -23,6 +23,9 @@
   button:disabled { background: #2a3342; color: #6b7686; cursor: not-allowed; }
   pre { background: #0c0f14; padding: 12px; border-radius: 8px; color: #9aa6b8; font-size: 15px; white-space: pre-wrap; }
   canvas#xrcanvas { display: none; }
+  label.bril { display: flex; align-items: center; gap: 10px; font-size: 20px; }
+  select { font-size: 22px; padding: 12px; border-radius: 10px; background: #2a3342; color: #fff; border: 0; }
+  button#btn-send { background: #0B6B65; }
 </style>
 <script type="importmap">
 { "imports": {
@@ -34,12 +37,20 @@
 <body>
 <main>
   <h1>PICO WebXR capability test</h1>
-  <p class="sub">Open deze pagina in de PICO-browser. Start daarna de VR-test en de passthrough-test. Na afloop van elke sessie verschijnen extra regels in de tabel.</p>
+  <p class="sub">Open deze pagina in de PICO-browser. Start daarna de VR-test en de passthrough-test. Na afloop van elke sessie verschijnen extra regels in de tabel. Klik tot slot op "Verstuur resultaten".</p>
+  <p class="sub"><strong>Hand tracking testen:</strong> zet hand tracking aan in de PICO-instellingen. Start de VR-test, leg beide controllers neer en houd je handen voor de bril. Knijp duim en wijsvinger samen (pinch) terwijl je naar een kubus wijst.</p>
   <div class="buttons">
+    <label class="bril">Bril
+      <select id="bril">
+        <option>Bril 1</option><option>Bril 2</option><option>Bril 3</option><option>Bril 4</option><option>Overig</option>
+      </select>
+    </label>
     <button id="btn-vr" disabled>Start VR-test</button>
     <button id="btn-ar" disabled>Start passthrough-test (AR)</button>
+    <button id="btn-send">Verstuur resultaten</button>
     <button id="btn-copy" class="secondary">Kopieer resultaten</button>
   </div>
+  <p id="send-status" class="sub"></p>
   <table id="results"><tbody></tbody></table>
   <pre id="log"></pre>
 </main>
@@ -250,6 +261,8 @@ function onSessionEnd() {
     addRow(`${tag}: gemeten FPS (gem / min)`, `${avg} / ${Math.min(...fpsSamples)} over ${fpsSamples.length} s`);
   }
   addRow(`${tag}: input-bronnen gezien`, inputsSeen.size ? [...inputsSeen].join(' ; ') : 'geen');
+  const handsSeen = [...inputsSeen].some(s => s.includes('| hand |'));
+  addRow(`${tag}: hand tracking gezien`, handsSeen ? 'ja' : 'nee', handsSeen ? 'ok' : 'info');
   addRow(`${tag}: geslaagde selecties (trigger/pinch)`, selections, selections > 0 ? 'ok' : 'info');
   current = null;
 }
@@ -297,6 +310,38 @@ document.getElementById('btn-copy').addEventListener('click', async () => {
   const text = results.map(r => `${r.name}: ${r.value}`).join('\n') + (logEl.textContent ? '\n\nLog:\n' + logEl.textContent : '');
   try { await navigator.clipboard.writeText(text); log('Resultaten gekopieerd.'); }
   catch { logEl.textContent = text; log('\nKopiëren niet toegestaan; selecteer de tekst hierboven handmatig.'); }
+});
+
+// ---------- Versturen naar deploybase-formulier ----------
+const FORM_URL = 'https://api.deploybase.eu/f/DCYfbsnqw6JSyT';
+const sendStatus = document.getElementById('send-status');
+document.getElementById('btn-send').addEventListener('click', async () => {
+  const bril = document.getElementById('bril').value;
+  const text = results.map(r => `${r.name}: ${r.value}`).join('\n');
+  const payload = {
+    _subject: `XR-test ${bril} ${new Date().toLocaleString('nl-NL')}`,
+    bril,
+    tijdstip: new Date().toISOString(),
+    pagina: location.href,
+    useragent: navigator.userAgent,
+    resultaten: text,
+    log: logEl.textContent || '',
+    json: JSON.stringify(results),
+  };
+  sendStatus.textContent = 'Bezig met versturen...';
+  try {
+    const res = await fetch(FORM_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json().catch(() => ({}));
+    sendStatus.textContent = res.ok && data.ok !== false
+      ? `Verstuurd (${bril}, ${results.length} regels).`
+      : `Versturen mislukt: HTTP ${res.status}. Gebruik "Kopieer resultaten".`;
+  } catch (e) {
+    sendStatus.textContent = `Versturen mislukt: ${e.message}. Gebruik "Kopieer resultaten".`;
+  }
 });
 
 drawPanel(['Wachten op sessie...']);
