@@ -83,7 +83,7 @@ renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
-renderer.toneMappingExposure = 1.1;
+renderer.toneMappingExposure = 1.35;
 renderer.xr.enabled = true;
 renderer.domElement.style.display = 'none';
 document.body.appendChild(renderer.domElement);
@@ -212,13 +212,13 @@ const drawTapestry = (g, s) => {
   g.fillRect(s / 2 - 12, 150, 24, 190); g.fillRect(s / 2 - 70, 210, 140, 24);
   const r = rng(3); speckle(g, s, r, 6000, 0.06);
 };
-const drawNight = (g, s) => {
+const drawNight = (withMoon) => (g, s) => {
   const grd = g.createLinearGradient(0, 0, 0, s);
   grd.addColorStop(0, '#0c1630'); grd.addColorStop(1, '#2a3c66');
   g.fillStyle = grd; g.fillRect(0, 0, s, s);
   const r = rng(42);
   for (let i = 0; i < 160; i++) { g.fillStyle = `rgba(255,255,240,${0.3 + r() * 0.7})`; g.fillRect(r() * s, r() * s * 0.8, 1.5, 1.5); }
-  g.fillStyle = '#f4f0d8'; g.beginPath(); g.arc(s * 0.7, s * 0.25, 26, 0, Math.PI * 2); g.fill();
+  if (withMoon) { g.fillStyle = '#f4f0d8'; g.beginPath(); g.arc(s * 0.7, s * 0.25, 26, 0, Math.PI * 2); g.fill(); }
   // lood-raam ruitjes
   g.strokeStyle = 'rgba(20,20,20,0.9)'; g.lineWidth = 5;
   for (let i = -s; i < 2 * s; i += 64) {
@@ -247,7 +247,8 @@ const T = {
   cream: canvasTex(256, drawFabric('#d9ccb0', 'rgba(120,100,70,0.15)'), 2, 2),
   rug: canvasTex(512, drawRug),
   tapestry: canvasTex(512, drawTapestry),
-  night: canvasTex(512, drawNight),
+  night: canvasTex(512, drawNight(true)),
+  nightArch: canvasTex(512, drawNight(false)),
 };
 const M = {
   stone: new THREE.MeshLambertMaterial({ map: T.stone }),
@@ -263,6 +264,7 @@ const M = {
   iron: new THREE.MeshLambertMaterial({ color: 0x2a2826 }),
   straw: new THREE.MeshLambertMaterial({ color: 0xc9a85a }),
   window: new THREE.MeshBasicMaterial({ map: T.night }),
+  windowArch: new THREE.MeshBasicMaterial({ map: T.nightArch }),
   soot: new THREE.MeshBasicMaterial({ color: 0x0d0907 }),
   wax: new THREE.MeshLambertMaterial({ color: 0xefe6cc, emissive: 0x2a2010 }),
   pewter: new THREE.MeshLambertMaterial({ color: 0x9a9890 }),
@@ -319,7 +321,7 @@ function buildRoom() {
   const win = new THREE.Group();
   const glass = new THREE.Mesh(new THREE.PlaneGeometry(0.8, 1.2), M.window);
   win.add(glass);
-  const arch = new THREE.Mesh(new THREE.CircleGeometry(0.4, 24, 0, Math.PI), M.window);
+  const arch = new THREE.Mesh(new THREE.CircleGeometry(0.4, 24, 0, Math.PI), M.windowArch);
   arch.position.y = 0.6; win.add(arch);
   win.position.set(-0.1, 1.9, -HD + 0.02);
   scene.add(win);
@@ -422,7 +424,7 @@ function flame(x, y, z, scale, light) {
 }
 
 function buildLights() {
-  scene.add(new THREE.HemisphereLight(0x8a7a6a, 0x2a2018, 0.55));
+  scene.add(new THREE.HemisphereLight(0x9a8a78, 0x2a2018, 1.1));
   const moon = new THREE.DirectionalLight(0x8aa6ff, 0.35);
   moon.position.set(0, 3, -6); scene.add(moon);
 
