@@ -21,6 +21,10 @@
   td:first-child { color: #29BFB5; white-space: nowrap; }
   #status { color: #CDF441; }
   canvas { display: none; }
+  select { font-size: 22px; padding: 14px; border-radius: 12px; background: #2B2C30; color: #fff; border: 0; }
+  button.secondary { background: #2B2C30; }
+  button.secondary:hover { background: #0B6B65; }
+  #send-status { color: #CDF441; }
   .credits { font-size: 15px; color: #8d8e89; margin-top: 32px; }
 </style>
 <script type="importmap">
@@ -40,6 +44,14 @@
     <button id="btn-vr" disabled>Start in VR</button>
     <button id="btn-ar" disabled>Start in passthrough</button>
   </div>
+  <div class="buttons">
+    <select id="bril">
+      <option>Bril 1</option><option>Bril 2</option><option>Bril 3</option><option>Bril 4</option>
+      <option>Meta Quest 3</option><option>Meta Quest Pro</option><option>Overig</option>
+    </select>
+    <button id="btn-send" class="secondary">Verstuur resultaten</button>
+  </div>
+  <p id="send-status"></p>
   <table>
     <tr><td>Oppakken</td><td>Richt op een object, houd de trekker of de grijpknop ingedrukt</td></tr>
     <tr><td>Loslaten</td><td>Trekker of grijpknop loslaten; het object blijft in de lucht hangen</td></tr>
@@ -58,6 +70,8 @@ import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { XRControllerModelFactory } from 'three/addons/webxr/XRControllerModelFactory.js';
 
 const statusEl = document.getElementById('status');
+const stats = { loadMs: null, loadError: null, sessions: [] };
+let cur = null; // huidige sessie-statistiek
 
 // ---------- Renderer en scene ----------
 const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
@@ -120,6 +134,7 @@ function addPedestal(pos) {
 }
 
 async function loadAll() {
+  const t0 = performance.now();
   let done = 0;
   await Promise.all(MODELS.map(async (m, i) => {
     const gltf = await loader.loadAsync(m.file);
@@ -175,9 +190,11 @@ async function loadAll() {
     done++;
     statusEl.textContent = `Modellen laden... ${done}/${MODELS.length}`;
   }));
+  stats.loadMs = Math.round(performance.now() - t0);
 }
 
 function resetAll() {
+  if (cur) cur.resets++;
   for (const g of grabbables) {
     if (g.userData.held) continue;
     world.attach(g);
@@ -218,6 +235,11 @@ function grab(controller) {
   controller.userData.holding = t.obj;
   controller.userData.ray.scale.z = t.distance;
   pulse(controller, 0.4, 40);
+  if (cur) {
+    cur.grabs++;
+    cur.objects.add(t.obj.userData.name);
+    if (controllers.every(c => c.userData.holding)) cur.twoHanded++;
+  }
 }
 
 function release(controller) {
@@ -243,7 +265,10 @@ for (let i = 0; i < 2; i++) {
   ray.scale.z = 3;
   c.add(ray);
   c.userData = { ray, holding: null, inputSource: null, prevA: false };
-  c.addEventListener('connected', e => { c.userData.inputSource = e.data; });
+  c.addEventListener('connected', e => {
+    c.userData.inputSource = e.data;
+    if (cur) cur.inputs.add(`${e.data.handedness} | ${e.data.hand ? 'hand' : 'controller'} | ${(e.data.profiles || [])[0] || '?'}`);
+  });
   c.addEventListener('disconnected', () => { release(c); c.userData.inputSource = null; });
   c.addEventListener('selectstart', () => grab(c));
   c.addEventListener('selectend', () => release(c));
@@ -307,16 +332,70 @@ async function start(mode) {
   scene.background = vr ? new THREE.Color(0x232427) : null;
   floor.visible = vr;
   grid.visible = vr;
+  cur = { mode, ref, start: performance.now(), fps: [], grabs: 0, twoHanded: 0, resets: 0, objects: new Set(), inputs: new Set() };
+  session.addEventListener('end', () => {
+    const fps = cur.fps;
+    stats.sessions.push({
+      modus: cur.mode === 'immersive-vr' ? 'VR' : 'passthrough',
+      referentie: cur.ref,
+      duur_s: Math.round((performance.now() - cur.start) / 1000),
+      fps_gem: fps.length ? Math.round(fps.reduce((a, b) => a + b, 0) / fps.length) : null,
+      fps_min: fps.length ? Math.min(...fps) : null,
+      fps_p10: fps.length ? [...fps].sort((a, b) => a - b)[Math.floor(fps.length * 0.1)] : null,
+      oppakken: cur.grabs,
+      tweehandig: cur.twoHanded,
+      terugzetten: cur.resets,
+      objecten: [...cur.objects],
+      input: [...cur.inputs],
+    });
+    cur = null;
+    sendStatus.textContent = `Sessie vastgelegd (${stats.sessions.length}). Druk op "Verstuur resultaten" om te versturen.`;
+  });
   await renderer.xr.setSession(session);
 }
 
 // ---------- Loop ----------
 const clock = new THREE.Clock();
+let frames = 0, lastT = performance.now();
 renderer.setAnimationLoop(() => {
   const dt = Math.min(clock.getDelta(), 0.05);
+  frames++;
+  const now = performance.now();
+  if (now - lastT >= 1000) {
+    if (cur && renderer.xr.isPresenting) cur.fps.push(Math.round(frames * 1000 / (now - lastT)));
+    frames = 0; lastT = now;
+  }
   mixers.forEach(m => m.update(dt));
   if (renderer.xr.isPresenting) updateControllers(dt);
   renderer.render(scene, camera);
+});
+
+// ---------- Resultaten versturen ----------
+const FORM_URL = 'https://api.deploybase.eu/f/DCYfbsnqw6JSyT';
+const sendStatus = document.getElementById('send-status');
+document.getElementById('btn-send').addEventListener('click', async () => {
+  const bril = document.getElementById('bril').value;
+  const payload = {
+    _subject: `XR-objecten ${bril} ${new Date().toLocaleString('nl-NL')}`,
+    demo: 'objecten',
+    bril,
+    tijdstip: new Date().toISOString(),
+    useragent: navigator.userAgent,
+    laadtijd_ms: stats.loadMs,
+    laadfout: stats.loadError || '',
+    sessies: JSON.stringify(stats.sessions),
+  };
+  sendStatus.textContent = 'Bezig met versturen...';
+  try {
+    const res = await fetch(FORM_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    sendStatus.textContent = res.ok ? `Verstuurd (${bril}, ${stats.sessions.length} sessie(s)).` : `Versturen mislukt: HTTP ${res.status}.`;
+  } catch (e) {
+    sendStatus.textContent = `Versturen mislukt: ${e.message}`;
+  }
 });
 
 // ---------- Init ----------
@@ -327,6 +406,7 @@ try {
   await loadAll();
   statusEl.textContent = 'Klaar. Kies VR of passthrough.';
 } catch (e) {
+  stats.loadError = e.message;
   statusEl.textContent = `Laden mislukt: ${e.message}`;
 }
 if (navigator.xr) {
