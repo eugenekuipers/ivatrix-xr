@@ -133,6 +133,11 @@ async function loadAll() {
       }
     });
 
+    // Geanimeerde (skinned) modellen: begrenzing berekenen met de botten in rustpositie,
+    // anders komt er een veel te grote box uit en wordt het model piepklein.
+    obj.updateMatrixWorld(true);
+    obj.traverse(o => { if (o.isSkinnedMesh) { o.skeleton.update(); o.computeBoundingBox(); } });
+
     // normaliseren: grootste afmeting = m.size, middelpunt in de oorsprong
     const box = new THREE.Box3().setFromObject(obj);
     const size = box.getSize(new THREE.Vector3());
@@ -143,18 +148,19 @@ async function loadAll() {
 
     const wrapper = new THREE.Group();
     wrapper.add(obj);
-    wrapper.userData = { name: m.name, home: homePosition(i, MODELS.length), homeQuat: new THREE.Quaternion(), held: null };
-    wrapper.position.copy(wrapper.userData.home);
-    wrapper.position.y += m.size / 2 - 0.2 + 0.02; // op de sokkel
-    wrapper.userData.home.copy(wrapper.position);
-    wrapper.lookAt(0, wrapper.position.y, 0);
-    wrapper.userData.homeQuat.copy(wrapper.quaternion);
+    wrapper.updateMatrixWorld(true);
 
-    // selectiekader
+    // selectiekader: berekenen zolang de wrapper nog in de oorsprong staat (lokale coördinaten)
     const hl = new THREE.Box3Helper(new THREE.Box3().setFromObject(obj), 0xCDF441);
     hl.visible = false;
     wrapper.add(hl);
-    wrapper.userData.highlight = hl;
+
+    wrapper.userData = { name: m.name, home: homePosition(i, MODELS.length), homeQuat: new THREE.Quaternion(), held: null, highlight: hl };
+    wrapper.position.copy(wrapper.userData.home);
+    wrapper.position.y += (size.y * scale) / 2 - 0.2 + 0.02; // onderkant op de sokkel
+    wrapper.userData.home.copy(wrapper.position);
+    wrapper.lookAt(0, wrapper.position.y, 0);
+    wrapper.userData.homeQuat.copy(wrapper.quaternion);
 
     if (gltf.animations?.length && m.anim) {
       const mixer = new THREE.AnimationMixer(obj);
