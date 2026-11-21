@@ -1,0 +1,306 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>PICO WebXR capability test</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin: 0; font-family: system-ui, sans-serif; background: #12161d; color: #e8ecf2; font-size: 20px; }
+  main { max-width: 960px; margin: 0 auto; padding: 32px 24px 64px; }
+  h1 { font-size: 32px; margin: 0 0 8px; }
+  p.sub { color: #9aa6b8; margin: 0 0 24px; }
+  table { width: 100%; border-collapse: collapse; margin: 16px 0 24px; }
+  td { padding: 10px 12px; border-bottom: 1px solid #263040; vertical-align: top; word-break: break-word; }
+  td:first-child { width: 38%; color: #b8c2d2; }
+  tr.ok td:last-child { color: #4fd18b; }
+  tr.fail td:last-child { color: #ff7a6b; }
+  tr.info td:last-child { color: #e8ecf2; }
+  .buttons { display: flex; flex-wrap: wrap; gap: 12px; }
+  button { font-size: 22px; padding: 16px 24px; border: 0; border-radius: 10px; background: #3b7cff; color: #fff; cursor: pointer; }
+  button.secondary { background: #2a3342; }
+  button:disabled { background: #2a3342; color: #6b7686; cursor: not-allowed; }
+  pre { background: #0c0f14; padding: 12px; border-radius: 8px; color: #9aa6b8; font-size: 15px; white-space: pre-wrap; }
+  canvas#xrcanvas { display: none; }
+</style>
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+} }
+</script>
+</head>
+<body>
+<main>
+  <h1>PICO WebXR capability test</h1>
+  <p class="sub">Open deze pagina in de PICO-browser. Start daarna de VR-test en de passthrough-test. Na afloop van elke sessie verschijnen extra regels in de tabel.</p>
+  <div class="buttons">
+    <button id="btn-vr" disabled>Start VR-test</button>
+    <button id="btn-ar" disabled>Start passthrough-test (AR)</button>
+    <button id="btn-copy" class="secondary">Kopieer resultaten</button>
+  </div>
+  <table id="results"><tbody></tbody></table>
+  <pre id="log"></pre>
+</main>
+
+<script type="module">
+import * as THREE from 'three';
+import { XRControllerModelFactory } from 'three/addons/webxr/XRControllerModelFactory.js';
+import { XRHandModelFactory } from 'three/addons/webxr/XRHandModelFactory.js';
+
+// ---------- Resultaten-tabel ----------
+const results = [];
+const tbody = document.querySelector('#results tbody');
+const logEl = document.getElementById('log');
+const esc = s => String(s).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+function addRow(name, value, status = 'info') {
+  results.push({ name, value: String(value), status });
+  const tr = document.createElement('tr');
+  tr.className = status;
+  tr.innerHTML = `<td>${esc(name)}</td><td>${esc(value)}</td>`;
+  tbody.appendChild(tr);
+}
+function log(msg) { logEl.textContent += msg + '\n'; }
+
+// ---------- Statische checks ----------
+const support = {};
+async function runChecks() {
+  addRow('User agent', navigator.userAgent);
+  addRow('HTTPS / secure context', window.isSecureContext ? 'ja' : 'nee (WebXR werkt dan niet)', window.isSecureContext ? 'ok' : 'fail');
+  addRow('CPU-kernen / geheugen (indicatief)', `${navigator.hardwareConcurrency ?? '?'} kernen / ${navigator.deviceMemory ?? '?'} GB (browser rondt af)`);
+
+  const gl = document.createElement('canvas').getContext('webgl2');
+  addRow('WebGL2', gl ? 'ja' : 'nee', gl ? 'ok' : 'fail');
+  if (gl) {
+    const dbg = gl.getExtension('WEBGL_debug_renderer_info');
+    if (dbg) addRow('GPU', gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL));
+  }
+
+  if (!('xr' in navigator)) { addRow('navigator.xr (WebXR API)', 'niet aanwezig', 'fail'); return; }
+  addRow('navigator.xr (WebXR API)', 'aanwezig', 'ok');
+
+  for (const mode of ['immersive-vr', 'immersive-ar']) {
+    let ok = false;
+    try { ok = await navigator.xr.isSessionSupported(mode); } catch (e) { log(`isSessionSupported(${mode}) fout: ${e.message}`); }
+    support[mode] = ok;
+    addRow(`Sessie ${mode}`, ok ? 'ondersteund' : 'niet ondersteund', ok ? 'ok' : 'fail');
+  }
+  addRow('XRHand (hand tracking API)', 'XRHand' in window ? 'aanwezig' : 'niet aanwezig', 'XRHand' in window ? 'ok' : 'fail');
+  addRow('XRWebGLBinding (layers API)', 'XRWebGLBinding' in window ? 'aanwezig' : 'niet aanwezig', 'XRWebGLBinding' in window ? 'ok' : 'fail');
+  addRow('Eye tracking', 'geen standaard WebXR API; alleen native (PICO SDK)', 'info');
+
+  document.getElementById('btn-vr').disabled = !support['immersive-vr'];
+  document.getElementById('btn-ar').disabled = !support['immersive-ar'];
+}
+
+// ---------- Three.js scene ----------
+const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+renderer.setPixelRatio(window.devicePixelRatio);
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.setClearColor(0x000000, 0);
+renderer.xr.enabled = true;
+renderer.domElement.id = 'xrcanvas';
+document.body.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.01, 50);
+scene.add(new THREE.HemisphereLight(0xffffff, 0x444444, 2));
+const sun = new THREE.DirectionalLight(0xffffff, 1.5);
+sun.position.set(1, 3, 2);
+scene.add(sun);
+
+const world = new THREE.Group();
+scene.add(world);
+const grid = new THREE.GridHelper(10, 20, 0x888888, 0x444444);
+world.add(grid);
+
+const targets = [];
+const baseColors = [0x4f8cff, 0xff7a45, 0x36c38a];
+baseColors.forEach((c, i) => {
+  const m = new THREE.Mesh(new THREE.BoxGeometry(0.25, 0.25, 0.25), new THREE.MeshStandardMaterial({ color: c }));
+  m.position.set(-0.5 + i * 0.5, 1.2, -1.2);
+  world.add(m);
+  targets.push(m);
+});
+
+// Info-paneel in VR
+const pc = document.createElement('canvas');
+pc.width = 1024; pc.height = 640;
+const ptex = new THREE.CanvasTexture(pc);
+const panel = new THREE.Mesh(new THREE.PlaneGeometry(1.2, 0.75), new THREE.MeshBasicMaterial({ map: ptex, transparent: true }));
+panel.position.set(0, 1.65, -1.8);
+world.add(panel);
+function drawPanel(lines) {
+  const g = pc.getContext('2d');
+  g.clearRect(0, 0, pc.width, pc.height);
+  g.fillStyle = 'rgba(20,24,32,0.92)';
+  g.fillRect(0, 0, pc.width, pc.height);
+  g.fillStyle = '#ffffff';
+  g.font = 'bold 44px sans-serif';
+  g.fillText('PICO WebXR test', 40, 70);
+  g.font = '30px monospace';
+  lines.slice(0, 12).forEach((l, i) => g.fillText(l, 40, 130 + i * 42));
+  ptex.needsUpdate = true;
+}
+
+// ---------- Controllers en handen ----------
+const cmf = new XRControllerModelFactory();
+const hmf = new XRHandModelFactory();
+const inputs = [{}, {}];
+const inputsSeen = new Set();
+const raycaster = new THREE.Raycaster();
+const tmp = new THREE.Matrix4();
+let selections = 0;
+
+for (let i = 0; i < 2; i++) {
+  const c = renderer.xr.getController(i);
+  const ray = new THREE.Line(
+    new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, 0, -1)]),
+    new THREE.LineBasicMaterial({ color: 0xffffff })
+  );
+  ray.scale.z = 3;
+  c.add(ray);
+  c.addEventListener('connected', e => {
+    const s = e.data;
+    inputs[i] = { handedness: s.handedness, hand: !!s.hand, profiles: (s.profiles || []).join(', ') };
+    inputsSeen.add(`${s.handedness} | ${s.hand ? 'hand' : 'controller'} | ${inputs[i].profiles}`);
+  });
+  c.addEventListener('disconnected', () => { inputs[i] = {}; });
+  c.addEventListener('selectstart', () => onSelect(c));
+  scene.add(c);
+
+  const grip = renderer.xr.getControllerGrip(i);
+  grip.add(cmf.createControllerModel(grip));
+  scene.add(grip);
+
+  const hand = renderer.xr.getHand(i);
+  hand.add(hmf.createHandModel(hand, 'spheres'));
+  scene.add(hand);
+}
+
+function onSelect(controller) {
+  tmp.identity().extractRotation(controller.matrixWorld);
+  raycaster.ray.origin.setFromMatrixPosition(controller.matrixWorld);
+  raycaster.ray.direction.set(0, 0, -1).applyMatrix4(tmp);
+  const hit = raycaster.intersectObjects(targets, false)[0];
+  if (hit) {
+    hit.object.material.color.setHex(Math.random() * 0xffffff);
+    selections++;
+  }
+}
+
+// ---------- Sessiebeheer ----------
+let current = null; // { mode, enabled, ref, frameRates }
+const fpsSamples = [];
+
+async function startSession(mode) {
+  const optional = mode === 'immersive-vr'
+    ? ['local-floor', 'bounded-floor', 'hand-tracking', 'layers']
+    : ['local-floor', 'hand-tracking', 'hit-test', 'plane-detection', 'anchors', 'depth-sensing'];
+  const init = { optionalFeatures: optional };
+  if (optional.includes('depth-sensing')) {
+    init.depthSensing = { usagePreference: ['cpu-optimized', 'gpu-optimized'], dataFormatPreference: ['luminance-alpha', 'float32'] };
+  }
+
+  let session;
+  try {
+    session = await navigator.xr.requestSession(mode, init);
+  } catch (e) {
+    log(`${mode}: volledige featureset geweigerd (${e.message}); opnieuw met basisset`);
+    try {
+      session = await navigator.xr.requestSession(mode, { optionalFeatures: ['local-floor', 'hand-tracking'] });
+    } catch (e2) {
+      addRow(`Start ${mode}`, `mislukt: ${e2.message}`, 'fail');
+      return;
+    }
+  }
+
+  let ref = 'local-floor';
+  try { await session.requestReferenceSpace('local-floor'); } catch { ref = 'local'; }
+  world.position.y = ref === 'local' ? -1.6 : 0;
+  renderer.xr.setReferenceSpaceType(ref);
+
+  scene.background = mode === 'immersive-vr' ? new THREE.Color(0x101418) : null;
+  grid.visible = mode === 'immersive-vr';
+
+  current = {
+    mode,
+    ref,
+    enabled: session.enabledFeatures ? Array.from(session.enabledFeatures) : null,
+    frameRates: session.supportedFrameRates ? Array.from(session.supportedFrameRates).join(', ') : 'niet gerapporteerd',
+  };
+  fpsSamples.length = 0;
+  selections = 0;
+  inputsSeen.clear();
+
+  session.addEventListener('end', onSessionEnd);
+  await renderer.xr.setSession(session);
+}
+
+function onSessionEnd() {
+  const c = current;
+  if (!c) return;
+  const tag = c.mode === 'immersive-vr' ? 'VR' : 'AR';
+  addRow(`${tag}: features toegekend`, c.enabled ? (c.enabled.join(', ') || 'geen') : 'browser rapporteert enabledFeatures niet', c.enabled ? 'ok' : 'info');
+  addRow(`${tag}: reference space`, c.ref, c.ref === 'local-floor' ? 'ok' : 'info');
+  addRow(`${tag}: ondersteunde framerates`, c.frameRates);
+  if (fpsSamples.length) {
+    const avg = Math.round(fpsSamples.reduce((a, b) => a + b, 0) / fpsSamples.length);
+    addRow(`${tag}: gemeten FPS (gem / min)`, `${avg} / ${Math.min(...fpsSamples)} over ${fpsSamples.length} s`);
+  }
+  addRow(`${tag}: input-bronnen gezien`, inputsSeen.size ? [...inputsSeen].join(' ; ') : 'geen');
+  addRow(`${tag}: geslaagde selecties (trigger/pinch)`, selections, selections > 0 ? 'ok' : 'info');
+  current = null;
+}
+
+function chunk(text, size) {
+  const out = [];
+  for (let i = 0; i < text.length; i += size) out.push(text.slice(i, i + size));
+  return out;
+}
+function updatePanel(fps) {
+  if (!current) return;
+  const feats = current.enabled ? current.enabled.join(', ') : 'n.v.t.';
+  const lines = [
+    `Modus: ${current.mode}   Ref: ${current.ref}`,
+    `FPS: ${fps}`,
+    ...chunk(`Features: ${feats}`, 52).slice(0, 3),
+  ];
+  inputs.forEach((inp, i) => {
+    if (inp.handedness) lines.push(`Input ${i + 1}: ${inp.handedness}, ${inp.hand ? 'hand' : 'controller'}`);
+  });
+  lines.push(`Selecties: ${selections}`);
+  lines.push('Trigger of pinch op een kubus om te testen.');
+  lines.push('Menuknop / systeemgebaar om te stoppen.');
+  drawPanel(lines);
+}
+
+// ---------- Render loop ----------
+let frames = 0, last = performance.now();
+renderer.setAnimationLoop(() => {
+  frames++;
+  const now = performance.now();
+  if (now - last >= 1000) {
+    const fps = Math.round(frames * 1000 / (now - last));
+    frames = 0; last = now;
+    if (renderer.xr.isPresenting) { fpsSamples.push(fps); updatePanel(fps); }
+  }
+  targets.forEach(m => { m.rotation.y += 0.01; m.rotation.x += 0.005; });
+  renderer.render(scene, camera);
+});
+
+// ---------- UI ----------
+document.getElementById('btn-vr').addEventListener('click', () => startSession('immersive-vr'));
+document.getElementById('btn-ar').addEventListener('click', () => startSession('immersive-ar'));
+document.getElementById('btn-copy').addEventListener('click', async () => {
+  const text = results.map(r => `${r.name}: ${r.value}`).join('\n') + (logEl.textContent ? '\n\nLog:\n' + logEl.textContent : '');
+  try { await navigator.clipboard.writeText(text); log('Resultaten gekopieerd.'); }
+  catch { logEl.textContent = text; log('\nKopiëren niet toegestaan; selecteer de tekst hierboven handmatig.'); }
+});
+
+drawPanel(['Wachten op sessie...']);
+runChecks();
+</script>
+</body>
+</html>
