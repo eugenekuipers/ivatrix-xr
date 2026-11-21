@@ -16,15 +16,13 @@
   .buttons { display: flex; flex-wrap: wrap; gap: 12px; margin: 24px 0; }
   button { font-size: 22px; padding: 16px 24px; border: 0; border-radius: 12px; background: #0B6B65; color: #fff; cursor: pointer; }
   button:disabled { background: #2B2C30; color: #6b6c68; cursor: not-allowed; }
+  button.secondary { background: #2B2C30; }
+  button.secondary:hover { background: #0B6B65; }
+  select { font-size: 22px; padding: 14px; border-radius: 12px; background: #2B2C30; color: #fff; border: 0; }
   table { border-collapse: collapse; margin-top: 12px; }
   td { padding: 8px 16px 8px 0; color: #d6d6d1; vertical-align: top; }
   td:first-child { color: #29BFB5; white-space: nowrap; }
-  #status { color: #CDF441; }
-  canvas { display: none; }
-  select { font-size: 22px; padding: 14px; border-radius: 12px; background: #2B2C30; color: #fff; border: 0; }
-  button.secondary { background: #2B2C30; }
-  button.secondary:hover { background: #0B6B65; }
-  #send-status { color: #CDF441; }
+  #status, #send-status { color: #CDF441; }
   .credits { font-size: 15px; color: #8d8e89; margin-top: 32px; }
 </style>
 <script type="importmap">
@@ -37,9 +35,9 @@
 <body>
 <main>
   <a href="../" class="back">&larr; Alle demo's</a>
-  <h1>3D-objecten oppakken</h1>
-  <p>Vijf objecten staan in een halve cirkel voor je. Pak ze op, draai ze en bekijk ze van dichtbij.</p>
-  <p id="status">Modellen laden...</p>
+  <h1>3D-objecten: stapelen, omgooien, weggooien</h1>
+  <p>Op de tafel staan objecten en blokken. Ze hebben zwaartekracht: je kunt ze stapelen, omstoten en weggooien. Het robotje loopt over de vloer; pak het op en zet het ergens anders neer.</p>
+  <p id="status">Laden...</p>
   <div class="buttons">
     <button id="btn-vr" disabled>Start in VR</button>
     <button id="btn-ar" disabled>Start in passthrough</button>
@@ -54,13 +52,14 @@
   <p id="send-status"></p>
   <table>
     <tr><td>Oppakken</td><td>Richt op een object, houd de trekker of de grijpknop ingedrukt</td></tr>
-    <tr><td>Loslaten</td><td>Trekker of grijpknop loslaten; het object blijft in de lucht hangen</td></tr>
+    <tr><td>Neerzetten / stapelen</td><td>Loslaten boven de tafel of op een ander object</td></tr>
+    <tr><td>Weggooien</td><td>Zwaai en laat los tijdens de beweging</td></tr>
     <tr><td>Draaien</td><td>Thumbstick links/rechts terwijl je vasthoudt</td></tr>
     <tr><td>Dichterbij / verder</td><td>Thumbstick omhoog/omlaag terwijl je vasthoudt</td></tr>
     <tr><td>Alles terugzetten</td><td>Knop A of X</td></tr>
     <tr><td>Stoppen</td><td>Menuknop of systeemknop</td></tr>
   </table>
-  <p class="credits">Modellen: ToyCar, SheenChair, Avocado, Lantern (Khronos glTF Sample Assets, CC0) en RobotExpressive (Tomás Laulhé / Quaternius, CC0).</p>
+  <p class="credits">Modellen: ToyCar, SheenChair, Avocado, Lantern (Khronos glTF Sample Assets, CC0) en RobotExpressive (Tomás Laulhé / Quaternius, CC0). Natuurkunde: Rapier (Apache-2.0).</p>
 </main>
 
 <script type="module">
@@ -68,10 +67,16 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { XRControllerModelFactory } from 'three/addons/webxr/XRControllerModelFactory.js';
+import RAPIER from '../vendor/rapier/rapier.es.js';
 
 const statusEl = document.getElementById('status');
+const sendStatus = document.getElementById('send-status');
 const stats = { loadMs: null, loadError: null, sessions: [] };
-let cur = null; // huidige sessie-statistiek
+let cur = null;
+
+// ---------- Maten van de opstelling (meter) ----------
+const TABLE = { x: 0, z: -0.8, w: 1.4, d: 0.7, top: 0.75, thick: 0.05 };
+const STEP = 1 / 72;
 
 // ---------- Renderer en scene ----------
 const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
@@ -81,7 +86,7 @@ renderer.setClearColor(0x000000, 0);
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.xr.enabled = true;
-renderer.domElement.style.display = "none"; // alleen in de bril renderen
+renderer.domElement.style.display = 'none';
 document.body.appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
@@ -90,170 +95,335 @@ const pmrem = new THREE.PMREMGenerator(renderer);
 scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
 scene.add(new THREE.HemisphereLight(0xffffff, 0x444444, 0.6));
 
-const world = new THREE.Group();
+const world = new THREE.Group();   // alles wat in de ruimte staat; physics-coördinaten = lokaal in deze groep
 scene.add(world);
 
-// Vloer (alleen in VR zichtbaar)
-const floor = new THREE.Mesh(
-  new THREE.CircleGeometry(4, 48),
-  new THREE.MeshStandardMaterial({ color: 0x2B2C30, roughness: 0.9 })
-);
-floor.rotation.x = -Math.PI / 2;
-world.add(floor);
+const floorMesh = new THREE.Mesh(new THREE.CircleGeometry(4, 48), new THREE.MeshStandardMaterial({ color: 0x2B2C30, roughness: 0.9 }));
+floorMesh.rotation.x = -Math.PI / 2;
+world.add(floorMesh);
 const grid = new THREE.GridHelper(8, 16, 0x29BFB5, 0x3a3b40);
 grid.position.y = 0.002;
 world.add(grid);
 
-// ---------- Objecten ----------
+// Tafel (visueel)
+const tableMat = new THREE.MeshStandardMaterial({ color: 0x45474A, roughness: 0.5 });
+const tableTop = new THREE.Mesh(new THREE.BoxGeometry(TABLE.w, TABLE.thick, TABLE.d), tableMat);
+tableTop.position.set(TABLE.x, TABLE.top - TABLE.thick / 2, TABLE.z);
+world.add(tableTop);
+for (const sx of [-1, 1]) for (const sz of [-1, 1]) {
+  const leg = new THREE.Mesh(new THREE.BoxGeometry(0.05, TABLE.top - TABLE.thick, 0.05), tableMat);
+  leg.position.set(TABLE.x + sx * (TABLE.w / 2 - 0.06), (TABLE.top - TABLE.thick) / 2, TABLE.z + sz * (TABLE.d / 2 - 0.06));
+  world.add(leg);
+}
+
+// ---------- Physics ----------
+let physics;
+const items = [];      // { name, wrapper, body, home:{p,q}, half, isRobot }
+let robot = null;      // item met extra state
+
+function initPhysics() {
+  physics = new RAPIER.World({ x: 0, y: -9.81, z: 0 });
+  physics.timestep = STEP;
+  // vloer
+  physics.createCollider(RAPIER.ColliderDesc.cuboid(6, 0.1, 6).setTranslation(0, -0.1, 0).setFriction(0.9));
+  // tafelblad
+  physics.createCollider(RAPIER.ColliderDesc.cuboid(TABLE.w / 2, TABLE.thick / 2, TABLE.d / 2)
+    .setTranslation(TABLE.x, TABLE.top - TABLE.thick / 2, TABLE.z).setFriction(0.9));
+}
+
+function hullPoints(wrapper, maxPoints = 2500) {
+  wrapper.updateMatrixWorld(true);
+  const inv = wrapper.matrixWorld.clone().invert();
+  const pts = [];
+  const v = new THREE.Vector3();
+  wrapper.traverse(o => {
+    if (!o.isMesh || o.isSkinnedMesh || !o.geometry?.attributes?.position) return;
+    const pos = o.geometry.attributes.position;
+    const m = new THREE.Matrix4().multiplyMatrices(inv, o.matrixWorld);
+    const stride = Math.max(1, Math.ceil(pos.count / maxPoints));
+    for (let i = 0; i < pos.count; i += stride) {
+      v.fromBufferAttribute(pos, i).applyMatrix4(m);
+      pts.push(v.x, v.y, v.z);
+    }
+  });
+  return new Float32Array(pts);
+}
+
+function yawToUser(p) { return Math.atan2(-p.x, -p.z); }
+
+function addItem({ name, wrapper, home, yaw = 0, collider, isRobot = false, half, angDamp = 0.3, massProps = null }) {
+  const q = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), yaw);
+  const desc = (isRobot ? RAPIER.RigidBodyDesc.kinematicPositionBased() : RAPIER.RigidBodyDesc.dynamic())
+    .setTranslation(home.x, home.y, home.z)
+    .setRotation({ x: q.x, y: q.y, z: q.z, w: q.w })
+    .setCcdEnabled(true)
+    .setAngularDamping(angDamp)
+    .setLinearDamping(0.05);
+  const body = physics.createRigidBody(desc);
+  if (isRobot) body.lockRotations(true, true);
+  collider.setFriction(0.8).setRestitution(0.1);
+  if (massProps) collider.setMassProperties(massProps.mass, massProps.com, massProps.inertia, { x: 0, y: 0, z: 0, w: 1 });
+  else collider.setDensity(400);
+  physics.createCollider(collider, body);
+  wrapper.position.copy(home);
+  wrapper.quaternion.copy(q);
+  world.add(wrapper);
+  const item = { name, wrapper, body, home: { p: home.clone(), q: q.clone() }, half, isRobot, held: null };
+  wrapper.userData.item = item;
+  items.push(item);
+  return item;
+}
+
+// ---------- Modellen ----------
+const loader = new GLTFLoader();
 const MODELS = [
-  { file: 'models/robot.glb',      name: 'Robot',      size: 0.45, anim: 'Dance' },
-  { file: 'models/toycar.glb',     name: 'Speelgoedauto', size: 0.35 },
-  { file: 'models/sheenchair.glb', name: 'Stoel',      size: 0.40 },
-  { file: 'models/lantern.glb',    name: 'Lantaarn',   size: 0.40 },
-  { file: 'models/avocado.glb',    name: 'Avocado',    size: 0.25 },
+  { file: 'models/toycar.glb',     name: 'Speelgoedauto', size: 0.30, x: -0.48 },
+  { file: 'models/sheenchair.glb', name: 'Stoel',         size: 0.32, x: -0.14 },
+  // lantaarn: zwaartepunt laag in de voet, anders valt hij door de uitstekende arm meteen om
+  { file: 'models/lantern.glb',    name: 'Lantaarn',      size: 0.30, x: 0.20, lowCom: true },
+  { file: 'models/avocado.glb',    name: 'Avocado',       size: 0.12, x: 0.48, angDamp: 2 },
 ];
 
-const grabbables = [];   // wrapper-groups die je kunt oppakken
-const mixers = [];
-const loader = new GLTFLoader();
-
-function homePosition(i, n) {
-  // halve cirkel op 1,1 m afstand, tafelhoogte 1,0 m
-  const angle = THREE.MathUtils.degToRad(-60 + (120 / (n - 1)) * i);
-  return new THREE.Vector3(Math.sin(angle) * 1.1, 1.0, -Math.cos(angle) * 1.1);
+function makeWrapper(obj, targetSize) {
+  obj.updateMatrixWorld(true);
+  obj.traverse(o => { if (o.isSkinnedMesh) { o.skeleton.update(); o.computeBoundingBox(); } });
+  const box = new THREE.Box3().setFromObject(obj);
+  const size = box.getSize(new THREE.Vector3());
+  const scale = targetSize / Math.max(size.x, size.y, size.z);
+  obj.scale.setScalar(scale);
+  obj.position.sub(box.getCenter(new THREE.Vector3()).multiplyScalar(scale));
+  const wrapper = new THREE.Group();
+  wrapper.add(obj);
+  wrapper.updateMatrixWorld(true);
+  const local = new THREE.Box3().setFromObject(obj);
+  const hl = new THREE.Box3Helper(local, 0xCDF441);
+  hl.visible = false;
+  wrapper.add(hl);
+  wrapper.userData.highlight = hl;
+  return { wrapper, half: local.getSize(new THREE.Vector3()).multiplyScalar(0.5) };
 }
 
-function addPedestal(pos) {
-  const p = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.16, 0.18, pos.y - 0.2, 32),
-    new THREE.MeshStandardMaterial({ color: 0x3a3b40, roughness: 0.6 })
-  );
-  p.position.set(pos.x, (pos.y - 0.2) / 2, pos.z);
-  world.add(p);
-  return p;
-}
-
-async function loadAll() {
-  const t0 = performance.now();
-  let done = 0;
-  await Promise.all(MODELS.map(async (m, i) => {
-    const gltf = await loader.loadAsync(m.file);
-    const obj = gltf.scene;
-
-    // zware materiaaleffecten uitzetten voor stabiele framerate
-    obj.traverse(o => {
-      if (o.isMesh && o.material) {
-        const mats = Array.isArray(o.material) ? o.material : [o.material];
-        mats.forEach(mat => { if ('transmission' in mat && mat.transmission > 0) { mat.transmission = 0; mat.transparent = false; } });
-      }
+function noHeavyMaterials(obj) {
+  obj.traverse(o => {
+    if (!o.isMesh || !o.material) return;
+    (Array.isArray(o.material) ? o.material : [o.material]).forEach(m => {
+      if ('transmission' in m && m.transmission > 0) { m.transmission = 0; m.transparent = false; }
     });
+  });
+}
 
-    // Geanimeerde (skinned) modellen: begrenzing berekenen met de botten in rustpositie,
-    // anders komt er een veel te grote box uit en wordt het model piepklein.
-    obj.updateMatrixWorld(true);
-    obj.traverse(o => { if (o.isSkinnedMesh) { o.skeleton.update(); o.computeBoundingBox(); } });
+async function loadModels() {
+  await Promise.all(MODELS.map(async m => {
+    const gltf = await loader.loadAsync(m.file);
+    noHeavyMaterials(gltf.scene);
+    const { wrapper, half } = makeWrapper(gltf.scene, m.size);
+    const home = new THREE.Vector3(m.x, TABLE.top + half.y + 0.005, TABLE.z - 0.15);
+    let collider = RAPIER.ColliderDesc.convexHull(hullPoints(wrapper));
+    if (!collider) collider = RAPIER.ColliderDesc.cuboid(half.x, half.y, half.z);
+    // oorsprong van het oorspronkelijke model (de voet) ligt in de wrapper op gltf.scene.position
+    const massProps = m.lowCom ? {
+      mass: 1.2,
+      com: { x: gltf.scene.position.x, y: -half.y * 0.6, z: gltf.scene.position.z },
+      inertia: { x: 0.01, y: 0.004, z: 0.01 },
+    } : null;
+    addItem({ name: m.name, wrapper, home, yaw: 0, collider, half, angDamp: m.angDamp ?? 0.3, massProps });
+  }));
+}
 
-    // normaliseren: grootste afmeting = m.size, middelpunt in de oorsprong
-    const box = new THREE.Box3().setFromObject(obj);
-    const size = box.getSize(new THREE.Vector3());
-    const scale = m.size / Math.max(size.x, size.y, size.z);
-    obj.scale.setScalar(scale);
-    const center = box.getCenter(new THREE.Vector3()).multiplyScalar(scale);
-    obj.position.sub(center);
-
+function makeBlocks() {
+  const colors = [0x29BFB5, 0xCDF441, 0x0B6B65, 0xF6F5F1, 0x45474A, 0x29BFB5];
+  const s = 0.1;
+  colors.forEach((c, i) => {
+    const mesh = new THREE.Mesh(new THREE.BoxGeometry(s, s, s), new THREE.MeshStandardMaterial({ color: c, roughness: 0.55 }));
     const wrapper = new THREE.Group();
-    wrapper.add(obj);
-    wrapper.updateMatrixWorld(true);
-
-    // selectiekader: berekenen zolang de wrapper nog in de oorsprong staat (lokale coördinaten)
-    const hl = new THREE.Box3Helper(new THREE.Box3().setFromObject(obj), 0xCDF441);
+    wrapper.add(mesh);
+    const hl = new THREE.Box3Helper(new THREE.Box3().setFromObject(mesh), 0xCDF441);
     hl.visible = false;
     wrapper.add(hl);
-
-    wrapper.userData = { name: m.name, home: homePosition(i, MODELS.length), homeQuat: new THREE.Quaternion(), held: null, highlight: hl };
-    wrapper.position.copy(wrapper.userData.home);
-    wrapper.position.y += (size.y * scale) / 2 - 0.2 + 0.02; // onderkant op de sokkel
-    wrapper.userData.home.copy(wrapper.position);
-    wrapper.lookAt(0, wrapper.position.y, 0);
-    wrapper.userData.homeQuat.copy(wrapper.quaternion);
-
-    if (gltf.animations?.length && m.anim) {
-      const mixer = new THREE.AnimationMixer(obj);
-      const clip = THREE.AnimationClip.findByName(gltf.animations, m.anim) || gltf.animations[0];
-      mixer.clipAction(clip).play();
-      mixers.push(mixer);
-    }
-
-    addPedestal(homePosition(i, MODELS.length));
-    world.add(wrapper);
-    grabbables.push(wrapper);
-    done++;
-    statusEl.textContent = `Modellen laden... ${done}/${MODELS.length}`;
-  }));
-  stats.loadMs = Math.round(performance.now() - t0);
+    wrapper.userData.highlight = hl;
+    const home = new THREE.Vector3(-0.4 + i * 0.16, TABLE.top + s / 2 + 0.005, TABLE.z + 0.18);
+    addItem({ name: `Blok ${i + 1}`, wrapper, home, collider: RAPIER.ColliderDesc.cuboid(s / 2, s / 2, s / 2), half: new THREE.Vector3(s / 2, s / 2, s / 2) });
+  });
 }
 
-function resetAll() {
-  if (cur) cur.resets++;
-  for (const g of grabbables) {
-    if (g.userData.held) continue;
-    world.attach(g);
-    g.position.copy(g.userData.home);
-    g.quaternion.copy(g.userData.homeQuat);
+// ---------- Robot ----------
+let robotMixer, robotActions = {}, robotAction = null;
+
+async function loadRobot() {
+  const gltf = await loader.loadAsync('models/robot.glb');
+  const { wrapper, half } = makeWrapper(gltf.scene, 0.45);
+  const home = new THREE.Vector3(0.9, half.y, -1.6);
+  const item = addItem({ name: 'Robot', wrapper, home, yaw: -Math.PI / 2, isRobot: true, half,
+    collider: RAPIER.ColliderDesc.cuboid(half.x * 0.7, half.y, half.z * 0.7) });
+  robotMixer = new THREE.AnimationMixer(gltf.scene);
+  for (const name of ['Walking', 'Idle', 'Dance', 'Wave', 'Jump']) {
+    const clip = THREE.AnimationClip.findByName(gltf.animations, name);
+    if (clip) robotActions[name] = robotMixer.clipAction(clip);
+  }
+  robot = Object.assign(item, { state: 'walk', heading: -Math.PI / 2, turnTimer: 2, restFrames: 0 });
+  playRobot('Walking');
+}
+
+function playRobot(name) {
+  const next = robotActions[name];
+  if (!next || next === robotAction) return;
+  next.reset().fadeIn(0.25).play();
+  robotAction?.fadeOut(0.25);
+  robotAction = next;
+}
+
+function robotSpotFree(x, z) {
+  const r = Math.hypot(x, z);
+  if (r < 0.7 || r > 2.4) return false;
+  const m = 0.25; // marge rond de tafel
+  if (Math.abs(x - TABLE.x) < TABLE.w / 2 + m && Math.abs(z - TABLE.z) < TABLE.d / 2 + m) return false;
+  return true;
+}
+
+function updateRobot(dt) {
+  if (!robot) return;
+  const b = robot.body;
+  if (robot.state === 'walk') {
+    robot.turnTimer -= dt;
+    if (robot.turnTimer <= 0) { robot.heading += (Math.random() - 0.5) * 1.2; robot.turnTimer = 2 + Math.random() * 3; }
+    const t = b.translation();
+    const speed = 0.22;
+    const nx = t.x + Math.sin(robot.heading) * speed * dt;
+    const nz = t.z + Math.cos(robot.heading) * speed * dt;
+    if (robotSpotFree(nx, nz)) {
+      b.setNextKinematicTranslation({ x: nx, y: robot.half.y, z: nz });
+    } else {
+      robot.heading += Math.PI * (0.5 + Math.random() * 0.5);
+    }
+    const q = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), robot.heading);
+    b.setNextKinematicRotation({ x: q.x, y: q.y, z: q.z, w: q.w });
+  } else if (robot.state === 'fall') {
+    const v = b.linvel();
+    robot.restFrames = (Math.abs(v.y) < 0.03 && Math.hypot(v.x, v.z) < 0.05) ? robot.restFrames + 1 : 0;
+    if (robot.restFrames > 20) {
+      const t = b.translation();
+      const onFloor = t.y < robot.half.y + 0.05;
+      if (onFloor && robotSpotFree(t.x, t.z)) {
+        robot.state = 'walk';
+        b.setBodyType(RAPIER.RigidBodyType.KinematicPositionBased, true);
+        playRobot('Walking');
+      } else if (onFloor) {
+        // op de vloer maar te dicht bij jou of de tafel: even zwaaien, dan wegwandelen
+        robot.state = 'walk';
+        b.setBodyType(RAPIER.RigidBodyType.KinematicPositionBased, true);
+        robot.heading = Math.atan2(t.x, t.z); // van je af
+        playRobot('Walking');
+      } else {
+        robot.state = 'perched';
+        playRobot('Dance');
+      }
+    }
+  } else if (robot.state === 'perched') {
+    // van de tafel geduwd of gevallen: opnieuw laten landen
+    const v = b.linvel();
+    if (Math.abs(v.y) > 0.3) { robot.state = 'fall'; robot.restFrames = 0; playRobot('Jump'); }
   }
 }
 
-// ---------- Controllers ----------
+// ---------- Selectie, grijpen, gooien ----------
 const cmf = new XRControllerModelFactory();
 const raycaster = new THREE.Raycaster();
 const tmpMat = new THREE.Matrix4();
 const controllers = [];
+const wrappers = () => items.map(i => i.wrapper);
 
-function setRay(controller) {
-  tmpMat.identity().extractRotation(controller.matrixWorld);
-  raycaster.ray.origin.setFromMatrixPosition(controller.matrixWorld);
+function setRay(c) {
+  tmpMat.identity().extractRotation(c.matrixWorld);
+  raycaster.ray.origin.setFromMatrixPosition(c.matrixWorld);
   raycaster.ray.direction.set(0, 0, -1).applyMatrix4(tmpMat);
 }
 
-function findTarget(controller) {
-  setRay(controller);
-  const hits = raycaster.intersectObjects(grabbables, true);
+function findTarget(c) {
+  setRay(c);
+  const hits = raycaster.intersectObjects(wrappers(), true);
   for (const h of hits) {
+    if (h.object.isLine || h.object.isLineSegments) continue;
     let o = h.object;
-    while (o && !grabbables.includes(o)) o = o.parent;
-    if (o && !o.userData.held && o.userData.highlight !== h.object) return { obj: o, distance: h.distance };
+    while (o && !o.userData.item) o = o.parent;
+    if (o && !o.userData.item.held) return { item: o.userData.item, distance: h.distance };
   }
   return null;
 }
 
-function grab(controller) {
-  if (controller.userData.holding) return;
-  const t = findTarget(controller);
+function localPose(wrapper, outP, outQ) {
+  world.updateMatrixWorld();
+  const m = new THREE.Matrix4().multiplyMatrices(world.matrixWorld.clone().invert(), wrapper.matrixWorld);
+  m.decompose(outP, outQ, new THREE.Vector3());
+}
+
+function grab(c) {
+  if (c.userData.holding) return;
+  const t = findTarget(c);
   if (!t) return;
-  controller.attach(t.obj);
-  t.obj.userData.held = controller;
-  controller.userData.holding = t.obj;
-  controller.userData.ray.scale.z = t.distance;
-  pulse(controller, 0.4, 40);
+  const it = t.item;
+  it.body.setBodyType(RAPIER.RigidBodyType.KinematicPositionBased, true);
+  c.attach(it.wrapper);
+  it.held = c;
+  c.userData.holding = it;
+  c.userData.hist = [];
+  c.userData.ray.scale.z = t.distance;
+  if (it.isRobot) { robot.state = 'held'; playRobot('Wave'); }
+  pulse(c, 0.4, 40);
   if (cur) {
     cur.grabs++;
-    cur.objects.add(t.obj.userData.name);
-    if (controllers.every(c => c.userData.holding)) cur.twoHanded++;
+    cur.objects.add(it.name);
+    if (controllers.every(x => x.userData.holding)) cur.twoHanded++;
   }
 }
 
-function release(controller) {
-  const obj = controller.userData.holding;
-  if (!obj) return;
-  world.attach(obj);
-  obj.userData.held = null;
-  controller.userData.holding = null;
+function release(c) {
+  const it = c.userData.holding;
+  if (!it) return;
+  const p = new THREE.Vector3(), q = new THREE.Quaternion();
+  localPose(it.wrapper, p, q);
+  world.attach(it.wrapper);
+  it.held = null;
+  c.userData.holding = null;
+
+  // werpsnelheid uit de laatste ~80 ms beweging
+  const h = c.userData.hist;
+  let v = new THREE.Vector3(), w = new THREE.Vector3();
+  if (h.length >= 2) {
+    const a = h[0], z = h[h.length - 1];
+    const dt = Math.max((z.t - a.t) / 1000, 1e-3);
+    v.subVectors(z.p, a.p).divideScalar(dt);
+    const dq = z.q.clone().multiply(a.q.clone().invert());
+    const angle = 2 * Math.acos(THREE.MathUtils.clamp(dq.w, -1, 1));
+    if (angle > 1e-3) {
+      const s = Math.sqrt(1 - dq.w * dq.w) || 1;
+      w.set(dq.x / s, dq.y / s, dq.z / s).multiplyScalar((angle > Math.PI ? angle - 2 * Math.PI : angle) / dt);
+    }
+  }
+  v.clampLength(0, 8);
+  w.clampLength(0, 15);
+
+  const b = it.body;
+  b.setBodyType(RAPIER.RigidBodyType.Dynamic, true);
+  b.setTranslation({ x: p.x, y: p.y, z: p.z }, true);
+  if (it.isRobot) {
+    const yaw = new THREE.Euler().setFromQuaternion(q, 'YXZ').y;
+    const qy = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), yaw);
+    b.setRotation({ x: qy.x, y: qy.y, z: qy.z, w: qy.w }, true);
+    b.setAngvel({ x: 0, y: 0, z: 0 }, true);
+    robot.heading = yaw;
+    robot.state = 'fall';
+    robot.restFrames = 0;
+    playRobot('Jump');
+  } else {
+    b.setRotation({ x: q.x, y: q.y, z: q.z, w: q.w }, true);
+    b.setAngvel({ x: w.x, y: w.y, z: w.z }, true);
+  }
+  b.setLinvel({ x: v.x, y: v.y, z: v.z }, true);
+  if (cur && v.length() > 1.2) cur.throws++;
 }
 
-function pulse(controller, intensity, ms) {
-  const gp = controller.userData.inputSource?.gamepad;
-  const act = gp?.hapticActuators?.[0];
-  try { act?.pulse?.(intensity, ms); } catch {}
+function pulse(c, intensity, ms) {
+  try { c.userData.inputSource?.gamepad?.hapticActuators?.[0]?.pulse?.(intensity, ms); } catch {}
 }
 
 for (let i = 0; i < 2; i++) {
@@ -264,7 +434,7 @@ for (let i = 0; i < 2; i++) {
   );
   ray.scale.z = 3;
   c.add(ray);
-  c.userData = { ray, holding: null, inputSource: null, prevA: false };
+  c.userData = { ray, holding: null, inputSource: null, prevA: false, hist: [] };
   c.addEventListener('connected', e => {
     c.userData.inputSource = e.data;
     if (cur) cur.inputs.add(`${e.data.handedness} | ${e.data.hand ? 'hand' : 'controller'} | ${(e.data.profiles || [])[0] || '?'}`);
@@ -276,41 +446,86 @@ for (let i = 0; i < 2; i++) {
   c.addEventListener('squeezeend', () => release(c));
   scene.add(c);
   controllers.push(c);
-
   const grip = renderer.xr.getControllerGrip(i);
   grip.add(cmf.createControllerModel(grip));
   scene.add(grip);
 }
 
-function updateControllers(dt) {
-  for (const g of grabbables) if (!g.userData.held) g.userData.highlight.visible = false;
+function resetAll() {
+  for (const it of items) {
+    if (it.held) continue;
+    const b = it.body;
+    const { p, q } = it.home;
+    if (it.isRobot) {
+      b.setBodyType(RAPIER.RigidBodyType.KinematicPositionBased, true);
+      robot.state = 'walk';
+      robot.heading = new THREE.Euler().setFromQuaternion(q, 'YXZ').y;
+      playRobot('Walking');
+    } else {
+      b.setBodyType(RAPIER.RigidBodyType.Dynamic, true);
+    }
+    b.setTranslation({ x: p.x, y: p.y, z: p.z }, true);
+    b.setRotation({ x: q.x, y: q.y, z: q.z, w: q.w }, true);
+    b.setLinvel({ x: 0, y: 0, z: 0 }, true);
+    b.setAngvel({ x: 0, y: 0, z: 0 }, true);
+  }
+  if (cur) cur.resets++;
+}
 
+const _p = new THREE.Vector3(), _q = new THREE.Quaternion();
+function updateControllers(dt) {
+  for (const it of items) if (!it.held) it.wrapper.userData.highlight.visible = false;
+  const now = performance.now();
   for (const c of controllers) {
     const gp = c.userData.inputSource?.gamepad;
-    const held = c.userData.holding;
-
-    if (held) {
-      // thumbstick: draaien en afstand
+    const it = c.userData.holding;
+    if (it) {
       const ax = gp?.axes ?? [];
       const sx = ax[2] ?? 0, sy = ax[3] ?? 0;
-      if (Math.abs(sx) > 0.15) held.rotateY(sx * dt * 2.5);
+      if (Math.abs(sx) > 0.15) it.wrapper.rotateY(sx * dt * 2.5);
       if (Math.abs(sy) > 0.15) {
-        const d = held.position.length();
+        const d = it.wrapper.position.length();
         const nd = THREE.MathUtils.clamp(d + sy * dt * 1.2, 0.15, 3);
-        if (d > 0.001) held.position.multiplyScalar(nd / d);
+        if (d > 0.001) it.wrapper.position.multiplyScalar(nd / d);
         c.userData.ray.scale.z = nd;
       }
-      held.userData.highlight.visible = true;
+      it.wrapper.userData.highlight.visible = true;
+      // kinematisch lichaam volgt de hand, zodat het andere objecten kan omduwen
+      localPose(it.wrapper, _p, _q);
+      it.body.setNextKinematicTranslation({ x: _p.x, y: _p.y, z: _p.z });
+      it.body.setNextKinematicRotation({ x: _q.x, y: _q.y, z: _q.z, w: _q.w });
+      const hist = c.userData.hist;
+      hist.push({ t: now, p: _p.clone(), q: _q.clone() });
+      while (hist.length > 2 && now - hist[0].t > 80) hist.shift();
     } else {
       const t = findTarget(c);
-      if (t) { t.obj.userData.highlight.visible = true; c.userData.ray.scale.z = t.distance; }
+      if (t) { t.item.wrapper.userData.highlight.visible = true; c.userData.ray.scale.z = t.distance; }
       else c.userData.ray.scale.z = 3;
     }
-
-    // knop A/X (xr-standard index 4): alles terugzetten
     const a = !!gp?.buttons?.[4]?.pressed;
     if (a && !c.userData.prevA) resetAll();
     c.userData.prevA = a;
+  }
+}
+
+let acc = 0;
+function stepPhysics(dt) {
+  acc += dt;
+  let n = 0;
+  while (acc >= STEP && n < 3) { physics.step(); acc -= STEP; n++; }
+  if (n === 3) acc = 0;
+  for (const it of items) {
+    if (it.held) continue;
+    const t = it.body.translation(), r = it.body.rotation();
+    // weggevallen of te ver gegooid: terug naar beginpositie
+    if (t.y < -1 || Math.hypot(t.x, t.z) > 6) {
+      it.body.setTranslation({ x: it.home.p.x, y: it.home.p.y, z: it.home.p.z }, true);
+      it.body.setLinvel({ x: 0, y: 0, z: 0 }, true);
+      it.body.setAngvel({ x: 0, y: 0, z: 0 }, true);
+      continue;
+    }
+    it.wrapper.position.set(t.x, t.y, t.z);
+    it.wrapper.quaternion.set(r.x, r.y, r.z, r.w);
   }
 }
 
@@ -327,14 +542,15 @@ async function start(mode) {
   try { await session.requestReferenceSpace('local-floor'); } catch { ref = 'local'; }
   world.position.y = ref === 'local' ? -1.6 : 0;
   renderer.xr.setReferenceSpaceType(ref);
-
   const vr = mode === 'immersive-vr';
   scene.background = vr ? new THREE.Color(0x232427) : null;
-  floor.visible = vr;
+  floorMesh.visible = vr;
   grid.visible = vr;
-  cur = { mode, ref, start: performance.now(), fps: [], grabs: 0, twoHanded: 0, resets: 0, objects: new Set(), inputs: new Set() };
+
+  cur = { mode, ref, start: performance.now(), fps: [], grabs: 0, twoHanded: 0, resets: 0, throws: 0, objects: new Set(), inputs: new Set() };
   session.addEventListener('end', () => {
     const fps = cur.fps;
+    const highest = Math.max(...items.filter(i => !i.isRobot).map(i => i.body.translation().y + i.half.y - TABLE.top));
     stats.sessions.push({
       modus: cur.mode === 'immersive-vr' ? 'VR' : 'passthrough',
       referentie: cur.ref,
@@ -344,7 +560,9 @@ async function start(mode) {
       fps_p10: fps.length ? [...fps].sort((a, b) => a - b)[Math.floor(fps.length * 0.1)] : null,
       oppakken: cur.grabs,
       tweehandig: cur.twoHanded,
+      gegooid: cur.throws,
       terugzetten: cur.resets,
+      hoogste_punt_boven_tafel_m: Math.round(highest * 100) / 100,
       objecten: [...cur.objects],
       input: [...cur.inputs],
     });
@@ -365,19 +583,22 @@ renderer.setAnimationLoop(() => {
     if (cur && renderer.xr.isPresenting) cur.fps.push(Math.round(frames * 1000 / (now - lastT)));
     frames = 0; lastT = now;
   }
-  mixers.forEach(m => m.update(dt));
-  if (renderer.xr.isPresenting) updateControllers(dt);
+  robotMixer?.update(dt);
+  if (physics) {
+    if (renderer.xr.isPresenting) updateControllers(dt);
+    updateRobot(dt);
+    stepPhysics(dt);
+  }
   renderer.render(scene, camera);
 });
 
 // ---------- Resultaten versturen ----------
 const FORM_URL = 'https://api.deploybase.eu/f/DCYfbsnqw6JSyT';
-const sendStatus = document.getElementById('send-status');
 document.getElementById('btn-send').addEventListener('click', async () => {
   const bril = document.getElementById('bril').value;
   const payload = {
     _subject: `XR-objecten ${bril} ${new Date().toLocaleString('nl-NL')}`,
-    demo: 'objecten',
+    demo: 'objecten-physics',
     bril,
     tijdstip: new Date().toISOString(),
     useragent: navigator.userAgent,
@@ -403,7 +624,14 @@ document.getElementById('btn-vr').addEventListener('click', () => start('immersi
 document.getElementById('btn-ar').addEventListener('click', () => start('immersive-ar'));
 
 try {
-  await loadAll();
+  const t0 = performance.now();
+  statusEl.textContent = 'Natuurkunde starten...';
+  await RAPIER.init();
+  initPhysics();
+  statusEl.textContent = 'Modellen laden...';
+  await Promise.all([loadModels(), loadRobot()]);
+  makeBlocks();
+  stats.loadMs = Math.round(performance.now() - t0);
   statusEl.textContent = 'Klaar. Kies VR of passthrough.';
 } catch (e) {
   stats.loadError = e.message;
