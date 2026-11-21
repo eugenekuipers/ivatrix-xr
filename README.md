@@ -13,6 +13,7 @@ WebXR-demo's voor Ivatrix-workshops op PICO 4 Enterprise (en Meta Quest 3 / Pro)
 | `/` | Startpagina (kiosk-launcher) met tegels naar de demo's |
 | `/test/` | Capability test; resultaten gaan naar deploybase-formulier `xr-testresultaten` |
 | `/objecten/` | 3D-objecten met natuurkunde (Rapier): stapelen, omgooien, weggooien; robot loopt over de vloer |
+| `/kasteel/` | VR-omgeving: middeleeuwse slaapkamer, procedureel gebouwd (geen externe modellen); bezem en voorwerpen met natuurkunde; lopen en draaien met thumbsticks. `?preview` toont de kamer zonder bril |
 | `/vendor/rapier/` | Rapier 0.14.0 physics engine (Apache-2.0), lokaal gehost |
 
 ## Nieuwe demo toevoegen
